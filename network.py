@@ -6,7 +6,8 @@ import config
 class Network():
     def __init__(self, scope_name, trainer):
         with tf.variable_scope(scope_name):
-            self.input_image = tf.placeholder(tf.float32, shape=[None, 84, 84, 3])
+            #self.input_image = tf.placeholder(tf.float32, shape=[None, 84, 84, 3])
+            self.input_image = tf.placeholder(tf.float32, shape=[None, 128, 128, 3])
 
             conv1_w = tf.Variable(tf.truncated_normal([8, 8, 3, 16], stddev=0.1))
             conv1_b = tf.Variable(tf.constant(0.1, shape=[16]))
@@ -14,11 +15,12 @@ class Network():
 
             conv2_w = tf.Variable(tf.truncated_normal([4, 4, 16, 32], stddev=0.1))
             conv2_b = tf.Variable(tf.constant(0.1, shape=[32]))
-            conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_w, strides=[1, 2, 2, 1], padding='SAME') + conv2_b)
+            conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_w, strides=[1, 3, 3, 1], padding='SAME') + conv2_b)
 
             flat = tf.reshape(conv2, [-1, 11*11*32])
 
             fc1_w = tf.Variable(tf.truncated_normal([11*11*32, 256], stddev=0.1))
+
             fc1_b = tf.Variable(tf.constant(0.1, shape=[256]))
             fc1 = tf.nn.relu(tf.matmul(flat, fc1_w) + fc1_b)
 
@@ -41,11 +43,11 @@ class Network():
                 lstm1_output = tf.reshape(lstm1_output, [-1, 64])
                 self.lstm1_state_c_out = [lstm1_state_output[0][0, :]]
                 self.lstm1_state_h_out = [lstm1_state_output[1][0, :]]
-            
+
             self.input_velocity = tf.placeholder(tf.float32, shape=[None, 6]) # aux input
             self.input_action = tf.placeholder(tf.int32, shape=[None]) # aux input
             self.input_action_ = tf.one_hot(self.input_action, config.N_ACTION, dtype=tf.float32) # make one-hot vector
-            
+
             lstm2_input = tf.concat([lstm1_output, self.input_velocity], 1)
             lstm2_input = tf.concat([lstm2_input, self.input_action_], 1)
             lstm2_input = tf.concat([lstm2_input, flat], 1)

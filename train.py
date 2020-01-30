@@ -7,6 +7,7 @@ import time
 import config
 import network
 import agent
+import logger
 
 if __name__ == '__main__':
     # prepare data folder
@@ -16,18 +17,20 @@ if __name__ == '__main__':
         os.makedirs(model_path)
     if not os.path.exists(frame_path):
         os.makedirs(frame_path)
-    
+
+    logger.configure('result/s0_random_initial')
     with tf.device('cpu:0'):
         global_episode = tf.Variable(0, trainable=False, dtype=tf.int32)
+        global_step = tf.Variable(0, trainable=False, dtype=tf.int32)
         trainer = tf.train.RMSPropOptimizer(config.LEARNING_RATE, decay=config.DECAY, momentum=config.MOMENTUM, epsilon=config.EPSILON)
         master_network = network.Network('global', trainer)
         print('master network created')
         sys.stdout.flush()
         agent_arr = []
         for i in range(config.THREAD):
-            agent_arr.append(agent.Agent('thread_'+str(i), trainer, global_episode, model_path))
+            agent_arr.append(agent.Agent('thread_'+str(i), trainer, global_episode, global_step,  model_path))
         saver = tf.train.Saver()
-    
+
     with tf.Session() as sess:
         coord = tf.train.Coordinator()
         sess.run(tf.global_variables_initializer())
@@ -43,4 +46,4 @@ if __name__ == '__main__':
             time.sleep(1)
             thread_arr.append(t)
         coord.join(thread_arr)
-        
+ 

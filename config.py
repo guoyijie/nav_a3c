@@ -1,4 +1,4 @@
-N_ACTION = 8
+N_ACTION = 5
 ENTROPY_REG = 1e-3
 BETA_DEPTH = 1
 MAX_GRADIENT_NORM = 40000000 # disable reward clipping

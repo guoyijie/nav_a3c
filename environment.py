@@ -4,52 +4,45 @@ import sys
 import numpy as np
 import scipy.misc
 
-import deepmind_lab_py3 as deepmind_lab
-
+from gibson.envs.husky_env import HuskyNavigateEnv
 import config
 
 def game_process(conn):
-    env = deepmind_lab.Lab('nav_maze_static_01', ['RGBD_INTERLACED', 'VEL.TRANS', 'VEL.ROT'], config={'width':'84', 'height':'84'})
+    env = HuskyNavigateEnv(config='gibson_configs/beechwood_c0_rgb_skip50_random_initial_separate.yaml')
     conn.send(0)
-    prev_action_vector = np.array([0]*config.N_ACTION, dtype=np.intc)
-    action_vector = np.array([
-        [0,0,0,1,0,0,0], 
-        [0,0,0,-1,0,0,0], 
-        [0,0,1,0,0,0,0], 
-        [0,0,-1,0,0,0,0],
-        [-20,0,0,0,0,0,0],
-        [20,0,0,0,0,0,0]
-    ], dtype=np.intc)
+    done = False
     while True:
         cmd, arg = conn.recv()
         if cmd=='reset':
-            env.reset()
-            prev_action_vector = np.array([0]*7, dtype=np.intc)
-            conn.send(env.observations())
+            ob = env.reset()
+            done = False
+            conn.send(ob)
         elif cmd=='action':
-            reward = 0.0
-            if arg>=0 and arg<6:
-                prev_action_vector = np.copy(action_vector[arg])
-                reward = env.step(prev_action_vector, num_steps=4)
-            elif arg==6:
-                prev_action_vector[0] = 20
-                reward = env.step(prev_action_vector, num_steps=4)
-            elif arg==7:
-                prev_action_vector[0] = -20
-                reward = env.step(prev_action_vector, num_steps=4)
-            running = env.is_running()
-            obs = env.observations() if running else 0
-            conn.send([obs, reward, running])
+            ob, reward, done, info = env.step(arg)
+            r, p, yaw = env.robot.body_rpy
+            rot_speed = np.array(
+                [[np.cos(-yaw), -np.sin(-yaw), 0],
+                 [np.sin(-yaw), np.cos(-yaw), 0],
+                 [        0,             0, 1]]
+            )
+            vx, vy, vz = np.dot(rot_speed, env.robot.robot_body.speed())
+            avx, avy, avz = np.dot(rot_speed, env.robot.robot_body.angular_speed())
+            vel = [vx, vy, vz, avx, avy, avz]
+            conn.send([ob, reward, running, vel])
         elif cmd=='observe':
-            conn.send([env.observations()['RGBD_INTERLACED']])
+            eye_pos, eye_quat = env.get_eye_pos_orientation()
+            pose = [eye_pos, eye_quat]
+            ob = env.render_observations(pose)
+            conn.send([ob])
         elif cmd=='running':
-            running = env.is_running()
+            running = not done
             conn.send([running])
         elif cmd=='stop':
             break
     env.close()
     conn.send(0)
     conn.close()
+
 
 class Environment():
     def __init__(self):
@@ -58,44 +51,45 @@ class Environment():
         self.proc.start()
         self.conn.recv()
         self.reset()
-    
+
     def reset(self):
         self.conn.send(['reset', 0])
         obs = self.conn.recv()
-    
+
     def stop(self):
         self.conn.send(['stop', 0])
         _ = self.conn.recv()
         self.conn.close()
         self.proc.join()
-    
-    def preprocess_frame(rgbd):
-        rgb = rgbd[:, :, 0:3]
-        d = rgbd[:, :, 3] # 84*84
-        d = d[16:-16, :] # crop
-        d = d[:, 2:-2] # crop
-        d = d[::13, ::5] # subsample
+
+    def preprocess_frame(self, depth):
+        #d = depth[16:-16, :] # crop
+        #d = d[:, 2:-2] # crop
+        #d = d[::13, ::5] # subsample
+        d = depth[16:-16,:]
+        d = d[:,16:-16]
+        d = d[::12, ::12]
         d = d.flatten()
         d = np.power(d/255.0, 10)
         d = np.digitize(d, [0,0.05,0.175,0.3,0.425,0.55,0.675,0.8,1.01])
         d -= 1
-        return rgb, d
+        return d
 
     def step(self, action_idx):
         self.conn.send(['action', action_idx])
-        obs, reward, running = self.conn.recv()
+        ob, reward, running, vel = self.conn.recv()
         if running:
-            rgb, d = Environment.preprocess_frame(obs['RGBD_INTERLACED'])
-            return rgb, d, np.concatenate((obs['VEL.TRANS'], obs['VEL.ROT'])), reward, running
+            rgb = ob['rgb_filled']
+            d = self.preprocess_frame(ob['depth'])
+            return rgb, d, vel, reward, running
         else:
             rgb, d = 0, 0
             return rgb, d, 0, reward, running
-        return rgb, d, np.concatenate((obs['VEL.TRANS'], obs['VEL.ROT'])), reward, running
 
     def frame(self):
         self.conn.send(['observe', 0])
-        rgbd = self.conn.recv()[0]
-        return Environment.preprocess_frame(rgbd)
+        ob = self.conn.recv()[0]
+        return ob['rgb_filled'], self.preprocess_frame(ob['depth'])
 
     def running(self):
         self.conn.send(['running', 0])

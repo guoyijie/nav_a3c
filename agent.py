@@ -8,12 +8,15 @@ import scipy.signal
 import config
 import environment
 import network
+import logger
+from collections import deque
 
 class Agent():
-    def __init__(self, name, trainer, global_episode, model_path):
+    def __init__(self, name, trainer, global_episode,  global_step, model_path):
         self.name = name
         self.trainer = trainer
         self.global_episode = global_episode
+        self.global_step = global_step
         self.summary_writer = tf.summary.FileWriter(name)
         self.network = network.Network(name, trainer) # local network
         from_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
@@ -23,34 +26,34 @@ class Agent():
         self.game = environment.Environment()
     
     # static function to save frame during training
-    def make_gif(images, fname, duration=2, true_image=False, salience=False, salIMGS=None):
-        import moviepy.editor as mpy
-        def make_frame(t):
-            try:
-                x = images[int(len(images)/duration*t)]
-            except:
-                x = images[-1]
-            if true_image:
-                return x.astype(np.uint8)
-            else:
-                return ((x+1)/2*255).astype(np.uint8)
+    #def make_gif(images, fname, duration=2, true_image=False, salience=False, salIMGS=None):
+    #    import moviepy.editor as mpy
+    #    def make_frame(t):
+    #        try:
+    #            x = images[int(len(images)/duration*t)]
+    #        except:
+    #            x = images[-1]
+    #        if true_image:
+    #            return x.astype(np.uint8)
+    #        else:
+    #            return ((x+1)/2*255).astype(np.uint8)
         
-        def make_mask(t):
-            try:
-                x = salIMGS[int(len(salIMGS)/duration*t)]
-            except:
-                x = salIMGS[-1]
-            return x
+    #    def make_mask(t):
+    #        try:
+    #            x = salIMGS[int(len(salIMGS)/duration*t)]
+    #        except:
+    #            x = salIMGS[-1]
+    #        return x
 
-        clip = mpy.VideoClip(make_frame, duration=duration)
-        if salience == True:
-            mask = mpy.VideoClip(make_mask, ismask=True,duration= duration)
-            clipB = clip.set_mask(mask)
-            clipB = clip.set_opacity(0)
-            mask = mask.set_opacity(0.1)
-            mask.write_gif(fname, fps = len(images) / duration,verbose=False)
-        else:
-            clip.write_gif(fname, fps = len(images) / duration,verbose=False)
+    #    clip = mpy.VideoClip(make_frame, duration=duration)
+    #    if salience == True:
+    #        mask = mpy.VideoClip(make_mask, ismask=True,duration= duration)
+    #        clipB = clip.set_mask(mask)
+    #        clipB = clip.set_opacity(0)
+    #        mask = mask.set_opacity(0.1)
+    #        mask.write_gif(fname, fps = len(images) / duration,verbose=False)
+    #    else:
+    #        clip.write_gif(fname, fps = len(images) / duration,verbose=False)
     
     # static function
     def resize_image(image):
@@ -106,6 +109,9 @@ class Agent():
     def run(self, sess, trainer, saver, coordinator):
         print('starting agent:', self.name)
         sys.stdout.flush()
+        ep_reward_list = deque(maxlen=40)
+        total_timesteps = 0
+        best_reward = 0
         with sess.as_default(), sess.graph.as_default():
             while not coordinator.should_stop():
                 sess.run(self.global_episode.assign_add(1))
@@ -156,10 +162,12 @@ class Agent():
                     action_idx = np.argmax(act_prob==action)
 
                     rgb_next, d, vel, reward, running = self.game.step(action_idx)
+                    total_timesteps += 1
                     train_buffer.append([rgb, prev_act_idx, prev_reward, prev_vel, action_idx, reward, pred_value[0][0], depth_pred, prev_d])
 
                     ep_reward += reward
                     ep_step += 1
+                    sess.run(self.global_step.assign_add(1))
 
                     if running:
                         if ep%config.SAVE_PERIOD==0:
@@ -192,15 +200,18 @@ class Agent():
                     vl, pl, el, dl, dl2, gradn, _ = self.train(train_buffer, sess, 0.0)
 
                 ep_finish_time = time.time()
+                ep_reward_list.append(ep_reward)
+                if ep_reward > best_reward:
+                    best_reward = ep_reward
                 print(self.name, 'elapse', str(int(ep_finish_time-ep_start_time)), 'seconds, reward:',ep_reward)
                 sys.stdout.flush()
 
                 
-                if ep%config.SAVE_PERIOD==0:
-                    imgs = np.array(frame_buffer)
-                    Agent.make_gif(imgs, './frame/image'+str(ep)+'_'+str(ep_reward)+'.gif', duration=len(imgs)*0.066, true_image=True, salience=False)
-                    print('frame saved')
-                    sys.stdout.flush()
+                #if ep%config.SAVE_PERIOD==0:
+                #    imgs = np.array(frame_buffer)
+                    #Agent.make_gif(imgs, './frame/image'+str(ep)+'_'+str(ep_reward)+'.gif', duration=len(imgs)*0.066, true_image=True, salience=False)
+                    #print('frame saved')
+                    #sys.stdout.flush()
                 
 
                 if ep%config.SAVE_PERIOD==0:
@@ -218,3 +229,12 @@ class Agent():
                     summary.value.add(tag='Performance/Reward', simple_value=float(ep_reward))
                     self.summary_writer.add_summary(summary, ep)
                     self.summary_writer.flush()
+
+                    logger.logkv("serial_timesteps", total_timesteps)
+                    logger.logkv("total_timesteps", sess.run(self.global_step))
+                    logger.logkv('episode_raw_reward', np.mean(ep_reward_list))
+                    logger.logkv('replay_buffer_best', best_reward)
+                    logger.logkv('fps', (ep_finish_time-ep_start_time)/ep_step)
+                    logger.dumpkvs()
+                    print(logger.get_dir())
+                    sys.stdout.flush()
